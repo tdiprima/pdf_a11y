@@ -1,2 +1,0 @@
-source,output,blockers_before,links_added,tagged_pages,skipped_pages,manual_work,error
-in/BMI503_Syllabus_Fall2022.pdf,out/BMI503_Syllabus_Fall2022.pdf,5,4,2,0,"Spot-check the generated heading levels and reading order in a validator. | Confirm tables, if any, have header cells; this tool cannot infer them.",
