@@ -14,15 +14,15 @@ cd pdf_a11y
 ```
 
 1. Put your PDFs somewhere, then audit:  
-`python3 main.py /path/to/your/pdfs --recursive --audit-only`. 
-Open reports/audit.csv. Any row saying `no_text_layer` → needs OCR first.
+`python3 main.py /path/to/your/pdfs --recursive --audit-only`.  
+Open reports/audit.csv. Any row saying `no_text_layer` → needs OCR first.  
 
 2. Fix them:  
-`python3 main.py /path/to/your/pdfs --recursive --out-dir /path/to/fixed`
+`python3 main.py /path/to/your/pdfs --recursive --out-dir /path/to/fixed`.  
 
 3. Check the results:  
-`verapdf --flavour ua1 --format text /path/to/fixed/*.pdf`
-Want PASS. Anything that says FAIL, send me the filename.
+`verapdf --flavour ua1 --format text /path/to/fixed/*.pdf`  
+Want PASS. Anything that says FAIL, send Claude the filename.
 
 4. Read reports/remediation.csv, column `manual_work` — those files need you.
 
