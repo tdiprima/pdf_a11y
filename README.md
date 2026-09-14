@@ -1,164 +1,88 @@
 # ♿📄 pdf-a11y
 
-Got a pile of PDFs with accessibility problems?
+A batch tool that repairs the accessibility defects in untagged PDFs using only the PDF file itself — no InDesign, no Word doc, no original source required.
 
-Even worse... the original Word or InDesign files are **gone forever?** 💀
+## The pile of PDFs nobody can fix anymore
 
-That's what **pdf-a11y** is for.
+Every department ends up with a folder of PDFs — old lecture slides, event flyers, posters, syllabi — that need to meet accessibility requirements (WCAG, PDF/UA) but whose source files are long gone. Without the original InDesign or Word document, "just re-export it properly" isn't an option. Fixing these by hand means opening each file in Acrobat, adding a language tag, retitling it, building a structure tree, and tagging every heading and link one at a time. For a handful of files that's tedious. For hundreds, it's not realistic — so the PDFs stay broken.
 
-It batch-fixes accessibility problems that can be safely repaired using **only the PDF itself**.
+## What this tool actually does
 
-It will:
+pdf-a11y audits a PDF, then applies every fix that can be determined safely and automatically:
 
-* 🔧 Fix problems it can determine automatically
-* 🌳 Build a best-guess accessibility structure/tag tree
-* 🔍 Tell you what it **couldn't** safely figure out
-* 🧑‍🔧 Flag PDFs that still need human attention
+- Sets the document language and a real title (derived from the content, not the filename)
+- Turns plain-text URLs and email addresses into real link annotations, with tab order set
+- Adds descriptive alt text to link annotations
+- Builds a heuristic structure tree — headings, paragraphs, lists — by comparing two independent PDF parses (PyMuPDF and pikepdf) and only tagging a page when their reading order agrees
 
-In other words:
+It refuses to guess where guessing would be dangerous. If a page's content stream contains constructs it can't reason about (images, shading, nested marked content), or the two extraction passes disagree on reading order, that page — or the whole file — is left untouched rather than tagged incorrectly. A file that's still untagged is recoverable; one with a wrong reading order silently misleads a screen reader. What it can't fix (image alt text, table headers, OCR for scanned pages) is reported in a manual work-list per file, and it never claims PDF/UA conformance — that still requires a validator like veraPDF and human review.
 
-**Computer fixes the obvious stuff. Human handles the weird stuff.**
-
-
-# 🚀 How to Use It
-
-First, go into the project directory:
+## A concrete run
 
 ```sh
-cd pdf_a11y
+# See the size of the problem first
+python3 main.py in/ --recursive --audit-only --report-dir reports
+
+# Fix everything that can be fixed automatically
+python3 main.py in/ --recursive --out-dir out
 ```
 
-Then it's basically:
+`reports/audit.csv` lists every file with its blocker and warning counts:
 
-**Audit → Fix → Verify → Handle leftovers**
+```
+path,pages,blockers,warnings,codes,error
+in/sample-doc-final4.pdf,12,3,1,untagged;no_lang;no_title;raw_url_link_text,
+```
 
+After remediation, `reports/remediation.csv` shows what changed and what's left for a human:
 
-## 1️⃣ Audit Your PDFs 🔍
+```
+source,output,blockers_before,links_added,tagged_pages,skipped_pages,unresolved_addresses,manual_work,error
+in/sample-doc-final4.pdf,out/sample-doc-final4.pdf,3,2,12,0,,Spot-check the generated heading levels and reading order in a validator. | Confirm tables, if any, have header cells; this tool cannot infer them.,
+```
 
-Put your PDFs somewhere and run:
+## Usage
+
+Requires Python 3.13+. Install with [uv](https://docs.astral.sh/uv/) or pip:
 
 ```sh
-python3 main.py /path/to/your/pdfs --recursive --audit-only
+uv sync
 ```
 
-Then open:
-
-```text
-reports/audit.csv
-```
-
-### 🚨 Look for this:
-
-```text
-no_text_layer
-```
-
-If a PDF says `no_text_layer`, it needs **OCR first**.
-
-Why?
-
-Because the PDF doesn't have usable text underneath the page image.
-
-Basically:
-
-👀 Human sees words.
-🤖 Computer sees picture.
-
-OCR needs to turn that picture into actual readable text before this tool can do its thing.
-
-
-## 2️⃣ Fix the PDFs 🔧
-
-Once they're ready:
+**Audit only** — report findings without writing anything:
 
 ```sh
-python3 main.py /path/to/your/pdfs --recursive --out-dir /path/to/fixed
+python3 main.py /path/to/pdfs --recursive --audit-only
 ```
 
-The repaired PDFs will be written to the directory you specify with:
+**Remediate** — write repaired copies to a separate directory:
 
-```text
---out-dir
+```sh
+python3 main.py /path/to/pdfs --recursive --out-dir /path/to/fixed
 ```
 
-So your originals can stay put while the fixed versions go somewhere else. ✨
+The output directory can't be inside the input tree — this stops a run from overwriting its own sources or re-processing already-fixed files.
 
+Other flags:
 
-## 3️⃣ Check the Results 🧪
+| Flag | Purpose |
+|---|---|
+| `--report-dir DIR` | Where audit/remediation reports go (default `./reports`) |
+| `--no-tagging` | Apply only the deterministic fixes (language, title, links); skip the structure tree |
+| `--dry-run` | List the files that would be processed, then stop |
+| `--lang TAG` | Force a BCP 47 language tag (default `en-US`) |
+| `--title TEXT` | Force this title on every file, instead of deriving one per file |
+| `--workers N` | Parallel worker processes (default 4) |
 
-Now verify the repaired PDFs with **veraPDF**:
+Configuration can also come from environment variables: `PDF_A11Y_LANG`, `PDF_A11Y_LOG_LEVEL`, `PDF_A11Y_WORKERS`, `PDF_A11Y_MAX_FILE_MB`.
+
+Verify the result with a real validator:
 
 ```sh
 verapdf --flavour ua1 --format text /path/to/fixed/*.pdf
 ```
 
-We're looking for the magic word:
-
-```text
-PASS ✅
-```
-
-If you get:
-
-```text
-FAIL ❌
-```
-
-that PDF still needs attention.
-
-Don't assume the tool can safely fix everything automatically — some accessibility decisions require an actual human brain. 🧠
-
-
-## 4️⃣ Check the Manual Work Report 👷
-
-Finally, open:
-
-```text
-reports/remediation.csv
-```
-
-Look at the:
-
-```text
-manual_work
-```
-
-column.
-
-Anything listed there is basically the tool saying:
-
-🤖 "Boss, I got as far as I safely could. This one's yours."
-
-Those are the PDFs that still need manual work.
-
-
-# 🧠 The Whole Process
-
-```text
-        📚 PDFs
-           │
-           ▼
-      🔍 AUDIT
-           │
-           ├── no_text_layer? ──► 👁️ OCR FIRST
-           │
-           ▼
-       🔧 FIX
-           │
-           ▼
-     🧪 veraPDF
-           │
-       ┌───┴───┐
-       ▼       ▼
-    PASS ✅   FAIL ❌
-               │
-               ▼
-          🧑 Human Work
-```
-
-Audit and look for `no_text_layer`, run the remediation, verify with veraPDF, then check `manual_work` for anything requiring you.
-
-## Run tests
+Run the test suite with:
 
 ```sh
 uv run python -m pytest -q
