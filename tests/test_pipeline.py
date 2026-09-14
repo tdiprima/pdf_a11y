@@ -148,6 +148,53 @@ class TestRemediateFile:
         result = remediate_file(source, tmp_path / "out", tmp_path, Config(), True)
         assert "missing %PDF- header" in result.error
 
+    def test_preserves_existing_title_and_language_by_default(
+        self, pdf_factory, tmp_path
+    ):
+        source = pdf_factory("in/doc.pdf", text="Executive Summary")
+        with pikepdf.open(source, allow_overwriting_input=True) as pdf:
+            pdf.docinfo[pikepdf.Name.Title] = pikepdf.String("Annual Report 2025")
+            pdf.Root.Lang = pikepdf.String("es-MX")
+            pdf.save(source)
+
+        result = remediate_file(
+            source, tmp_path / "out", tmp_path / "in", Config(), enable_tagging=False
+        )
+
+        assert result.succeeded, result.error
+        assert result.changes["title"] == "Annual Report 2025"
+        assert result.changes["language"] == "es-MX"
+        assert result.changes["title_changed"] is True  # XMP was synchronized.
+        assert result.changes["lang"] is False
+        with pikepdf.open(result.output) as pdf:
+            assert str(pdf.docinfo[pikepdf.Name.Title]) == "Annual Report 2025"
+            assert str(pdf.Root.Lang) == "es-MX"
+
+    def test_explicit_title_and_language_replace_existing_values(
+        self, pdf_factory, tmp_path
+    ):
+        source = pdf_factory("in/doc.pdf", text="Executive Summary")
+        with pikepdf.open(source, allow_overwriting_input=True) as pdf:
+            pdf.docinfo[pikepdf.Name.Title] = pikepdf.String("Old title")
+            pdf.Root.Lang = pikepdf.String("es-MX")
+            pdf.save(source)
+
+        result = remediate_file(
+            source,
+            tmp_path / "out",
+            tmp_path / "in",
+            Config(lang="fr-FR"),
+            enable_tagging=False,
+            title_override="New title",
+            language_override=True,
+        )
+
+        assert result.succeeded, result.error
+        assert result.changes["title"] == "New title"
+        assert result.changes["language"] == "fr-FR"
+        assert result.changes["title_changed"] is True
+        assert result.changes["lang"] is True
+
 
 def test_package_version_matches_pyproject():
     import tomllib

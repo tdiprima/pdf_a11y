@@ -127,6 +127,7 @@ def remediate_file(
     config: Config,
     enable_tagging: bool,
     title_override: str | None = None,
+    language_override: bool = False,
 ) -> RemediationResult:
     """Repair one PDF, writing the result into the output directory."""
     result = RemediationResult(source=str(source))
@@ -154,7 +155,15 @@ def remediate_file(
                 doc.save(str(staged), garbage=3, deflate=True)
 
             with pikepdf.open(staged) as pdf:
-                metadata_changes = apply_metadata_fixes(pdf, config.lang, title)
+                metadata_changes = apply_metadata_fixes(
+                    pdf,
+                    config.lang,
+                    title,
+                    overwrite_language=language_override,
+                    overwrite_title=title_override is not None,
+                )
+                applied_title = str(pdf.docinfo.get("/Title") or "")
+                applied_language = str(pdf.Root.get("/Lang") or "")
                 alt_texts = apply_link_alt_text(pdf)
                 tab_order_pages = set_annotation_tab_order(pdf)
 
@@ -172,8 +181,8 @@ def remediate_file(
 
         result.output = str(destination)
         result.changes = {
-            "title": title,
-            "language": config.lang,
+            "title": applied_title,
+            "language": applied_language,
             "links_added": links_added,
             "link_descriptions_added": alt_texts,
             "tab_order_pages": tab_order_pages,

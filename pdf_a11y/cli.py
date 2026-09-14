@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from typing import Callable, TypeVar
@@ -177,6 +178,7 @@ def _run_remediation(
     config: Config,
     enable_tagging: bool,
     title: str | None,
+    language_override: bool,
 ) -> list[RemediationResult]:
     results: list[RemediationResult] = []
     with ProcessPoolExecutor(
@@ -193,6 +195,7 @@ def _run_remediation(
                 config,
                 enable_tagging,
                 title,
+                language_override,
             ): path
             for path in paths
         }
@@ -281,6 +284,9 @@ def _remediate_batch(
         config,
         enable_tagging=not arguments.no_tagging,
         title=arguments.title,
+        language_override=(
+            arguments.lang is not None or "PDF_A11Y_LANG" in os.environ
+        ),
     )
     write_remediation_report(arguments.report_dir, results)
 

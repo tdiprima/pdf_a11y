@@ -372,13 +372,14 @@ def _attach_links(
 def tag_document(
     pdf: pikepdf.Pdf, pages_lines: list[list[TextLine]], lang: str
 ) -> dict[str, int]:
-    """Tag every page that can be tagged safely.
+    """Tag the document only when every content-bearing page can be tagged safely.
 
-    A page that cannot be handled is left exactly as it was: a file left
-    untagged is recoverable, a file tagged with a wrong reading order is not.
+    If any page cannot be handled, the entire document is left exactly as it
+    was: a file left untagged is recoverable, while an incomplete replacement
+    tree can hide content from assistive technology.
     """
     all_lines = [line for page_lines in pages_lines for line in page_lines]
-    all_roles = normalize_heading_levels(demote_duplicate_h1(classify_lines(all_lines)))
+    all_roles = demote_duplicate_h1(normalize_heading_levels(classify_lines(all_lines)))
 
     roles_by_page: list[list[Role]] = []
     cursor = 0
@@ -386,17 +387,10 @@ def tag_document(
         roles_by_page.append(all_roles[cursor : cursor + len(page_lines)])
         cursor += len(page_lines)
 
-    struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
-    document = pdf.make_indirect(
-        Dictionary(Type=Name.StructElem, S=Name.Document, P=struct_root, K=Array())
-    )
-    struct_root.K = document
-
-    nums: list = []
-    pending_links: list[tuple] = []
-    tagged_pages = 0
-    skipped_pages = 0
-
+    # Plan the entire document before changing any object. If a content-bearing
+    # page cannot be understood, installing a partial replacement tree would
+    # hide that page (and could discard an existing tree) from assistive tech.
+    page_plans: list[tuple[pikepdf.Page, list[TextLine], list, list[list[int]]] | None] = []
     for page_index, page in enumerate(pdf.pages):
         page_lines = pages_lines[page_index] if page_index < len(pages_lines) else []
         try:
@@ -406,12 +400,32 @@ def tag_document(
             logger.warning(
                 "page_not_tagged", extra={"page": page_index + 1, "reason": str(error)}
             )
-            skipped_pages += 1
-            continue
+            return {"tagged_pages": 0, "skipped_pages": len(pdf.pages)}
 
         if not groups:
-            skipped_pages += 1
+            page_plans.append(None)
             continue
+
+        page_plans.append((page, page_lines, instructions, groups))
+
+    tagged_pages = sum(plan is not None for plan in page_plans)
+    skipped_pages = len(page_plans) - tagged_pages
+    if tagged_pages == 0:
+        return {"tagged_pages": 0, "skipped_pages": skipped_pages}
+
+    struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
+    document = pdf.make_indirect(
+        Dictionary(Type=Name.StructElem, S=Name.Document, P=struct_root, K=Array())
+    )
+    struct_root.K = document
+
+    nums: list = []
+    pending_links: list[tuple] = []
+
+    for page_index, plan in enumerate(page_plans):
+        if plan is None:
+            continue
+        page, page_lines, instructions, groups = plan
 
         roles = roles_by_page[page_index]
         blocks = group_into_blocks(page_lines, roles)
@@ -433,10 +447,6 @@ def tag_document(
         nums.append(page_index)
         nums.append(pdf.make_indirect(Array(by_mcid)))
         pending_links.append((page, page_lines, by_line))
-        tagged_pages += 1
-
-    if tagged_pages == 0:
-        return {"tagged_pages": 0, "skipped_pages": skipped_pages}
 
     next_key = len(pdf.pages)
     for page, page_lines, by_line in pending_links:

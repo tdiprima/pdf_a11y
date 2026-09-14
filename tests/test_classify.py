@@ -114,6 +114,10 @@ class TestDemoteDuplicateH1:
         roles = [Role.P, Role.LBODY, Role.H3]
         assert demote_duplicate_h1(roles) == roles
 
+    def test_demotes_h1_roles_created_by_normalization(self):
+        roles = normalize_heading_levels([Role.H3, Role.P, Role.H3])
+        assert demote_duplicate_h1(roles) == [Role.H1, Role.P, Role.H2]
+
 
 class TestNormalizeHeadingLevels:
     def test_closes_a_gap_in_the_outline(self):

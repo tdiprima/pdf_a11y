@@ -18,11 +18,6 @@ _TRAILING_PUNCTUATION = ".,;:)]}>'\""
 _URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 _EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 
-# PyMuPDF returns one rect per line a match spans. A match broken across a
-# line break yields more than one; each gets its own annotation.
-MAX_RECTS_PER_MATCH = 4
-
-
 def _clean(candidate: str) -> str:
     return candidate.rstrip(_TRAILING_PUNCTUATION)
 
@@ -105,7 +100,10 @@ def place_addresses(page: fitz.Page) -> list[AddressPlacement]:
     placements: list[AddressPlacement] = []
 
     for address, is_email in find_addresses(text):
-        rects = page.search_for(address, quads=False)[:MAX_RECTS_PER_MATCH]
+        # search_for returns every occurrence on the page, as well as multiple
+        # rectangles when one occurrence wraps. All of them must be checked;
+        # truncating this list can leave repeated addresses silently unlinked.
+        rects = page.search_for(address, quads=False)
         unlinked = tuple(rect for rect in rects if not _already_linked(rect, existing))
         # Treat these rectangles as linked from now on so an overlapping match
         # for another address on the same line is not annotated twice.

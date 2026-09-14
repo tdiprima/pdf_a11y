@@ -61,6 +61,30 @@ class TestPlaceAddresses:
         assert placement.is_email
         assert placement.address == "someone@example.org"
 
+    def test_every_repeated_address_is_located(self, tmp_path):
+        path = tmp_path / "repeated.pdf"
+        fixed = tmp_path / "fixed.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        address = "https://example.com/repeated"
+        for index in range(5):
+            page.insert_text((72, 72 + index * 30), address, fontsize=10)
+        doc.save(path)
+        doc.close()
+
+        with fitz.open(path) as doc:
+            [placement] = place_addresses(doc[0])
+            assert len(placement.unlinked_rects) == 5
+
+            added, unresolved = add_link_annotations(doc)
+            assert added == 5
+            assert unresolved == []
+            doc.save(fixed)
+
+        with fitz.open(fixed) as doc:
+            assert len(doc[0].get_links()) == 5
+            assert place_addresses(doc[0])[0].unlinked_rects == ()
+
 
 class TestAuditLinkCheck:
     def test_unrelated_link_does_not_hide_plain_url(self, pdf_factory):
