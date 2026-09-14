@@ -158,4 +158,10 @@ Those are the PDFs that still need manual work.
 
 Audit and look for `no_text_layer`, run the remediation, verify with veraPDF, then check `manual_work` for anything requiring you.
 
+## Run tests
+
+```sh
+uv run python -m pytest -q
+```
+
 <br>

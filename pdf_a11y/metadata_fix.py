@@ -60,17 +60,3 @@ def apply_metadata_fixes(pdf: pikepdf.Pdf, lang: str, title: str) -> dict[str, b
         "title": set_title(pdf, title),
         "display_doc_title": set_display_doc_title(pdf),
     }
-
-
-def declare_pdfua_conformance(pdf: pikepdf.Pdf, part: int = 1) -> bool:
-    """Add the PDF/UA identification schema to the XMP metadata.
-
-    Only call this once the document really is tagged. The identifier is a
-    claim of conformance, and a false claim is worse than none: assistive
-    technology and validators both take it at face value.
-    """
-    with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
-        if meta.get("pdfuaid:part") == str(part):
-            return False
-        meta["pdfuaid:part"] = str(part)
-    return True

@@ -10,4 +10,5 @@ improvement over an untagged file but it is not a substitute for human
 review of the resulting reading order.
 """
 
+# Keep in step with [project] version in pyproject.toml.
 __version__ = "1.0.0"

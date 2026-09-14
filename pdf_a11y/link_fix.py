@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 import fitz
 import pikepdf
@@ -79,6 +80,41 @@ def _already_linked(rect: fitz.Rect, existing: list[fitz.Rect]) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class AddressPlacement:
+    """Where one address sits on a page and how much of it is still unlinked."""
+
+    address: str
+    is_email: bool
+    located: bool
+    unlinked_rects: tuple[fitz.Rect, ...]
+
+
+def place_addresses(page: fitz.Page) -> list[AddressPlacement]:
+    """Locate every address in the page text and test it against existing links.
+
+    Shared by the audit and the remediation so both agree on what "unlinked"
+    means: an address rectangle that no link annotation already covers. An
+    address that cannot be located usually wrapped mid-string across lines.
+    """
+    text = page.get_text()
+    if not text.strip():
+        return []
+
+    existing = _existing_link_rects(page)
+    placements: list[AddressPlacement] = []
+
+    for address, is_email in find_addresses(text):
+        rects = page.search_for(address, quads=False)[:MAX_RECTS_PER_MATCH]
+        unlinked = tuple(rect for rect in rects if not _already_linked(rect, existing))
+        # Treat these rectangles as linked from now on so an overlapping match
+        # for another address on the same line is not annotated twice.
+        existing.extend(unlinked)
+        placements.append(AddressPlacement(address, is_email, bool(rects), unlinked))
+
+    return placements
+
+
 def add_link_annotations(doc: fitz.Document) -> tuple[int, list[str]]:
     """Add URI annotations for addresses that are currently plain text.
 
@@ -89,29 +125,19 @@ def add_link_annotations(doc: fitz.Document) -> tuple[int, list[str]]:
     unresolved: list[str] = []
 
     for page in doc:
-        text = page.get_text()
-        if not text.strip():
-            continue
-
-        existing = _existing_link_rects(page)
-
-        for address, is_email in find_addresses(text):
-            rects = page.search_for(address, quads=False)
-            if not rects:
-                unresolved.append(address)
+        for placement in place_addresses(page):
+            if not placement.located:
+                unresolved.append(placement.address)
                 continue
 
-            for rect in rects[:MAX_RECTS_PER_MATCH]:
-                if _already_linked(rect, existing):
-                    continue
+            for rect in placement.unlinked_rects:
                 page.insert_link(
                     {
                         "kind": fitz.LINK_URI,
-                        "uri": _to_uri(address, is_email),
+                        "uri": _to_uri(placement.address, placement.is_email),
                         "from": rect,
                     }
                 )
-                existing.append(rect)
                 added += 1
 
     return added, unresolved

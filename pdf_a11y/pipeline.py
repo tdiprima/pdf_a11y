@@ -25,7 +25,7 @@ from .link_fix import (
     apply_link_alt_text,
     set_annotation_tab_order,
 )
-from .metadata_fix import apply_metadata_fixes, declare_pdfua_conformance
+from .metadata_fix import apply_metadata_fixes
 from .tag_fix import tag_document
 
 logger = logging.getLogger(__name__)
@@ -70,17 +70,27 @@ def validate_source(path: Path, max_bytes: int) -> None:
 
 
 def _resolve_output(source: Path, output_dir: Path, input_root: Path) -> Path:
-    """Mirror the input tree under the output directory."""
+    """Mirror the input tree under the output directory.
+
+    Refuses a destination that is the source itself: the repaired file must
+    never replace the only original copy.
+    """
     try:
         relative = source.relative_to(input_root)
     except ValueError:
         relative = Path(source.name)
     destination = output_dir / relative
+
+    if destination.resolve() == source.resolve():
+        raise UnreadablePdf(f"output path would overwrite the source: {source}")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     return destination
 
 
-def _collect_manual_work(audit: AuditResult, tag_counts: dict[str, int]) -> list[str]:
+def _collect_manual_work(
+    audit: AuditResult, tag_counts: dict[str, int], unresolved: list[str]
+) -> list[str]:
     """List what a human still has to do after the automated pass."""
     remaining: list[str] = []
 
@@ -89,6 +99,11 @@ def _collect_manual_work(audit: AuditResult, tag_counts: dict[str, int]) -> list
         remaining.append("Write alternative text for images; this cannot be generated.")
     if "no_text_layer" in codes:
         remaining.append("Run OCR: one or more pages have no text layer.")
+    if unresolved:
+        remaining.append(
+            f"Link {len(unresolved)} address(es) by hand; they could not be located "
+            f"on the page: {', '.join(unresolved)}"
+        )
     if tag_counts.get("skipped_pages"):
         remaining.append(
             f"{tag_counts['skipped_pages']} page(s) could not be tagged automatically."
@@ -98,6 +113,10 @@ def _collect_manual_work(audit: AuditResult, tag_counts: dict[str, int]) -> list
             "Spot-check the generated heading levels and reading order in a validator."
         )
     remaining.append("Confirm tables, if any, have header cells; this tool cannot infer them.")
+    remaining.append(
+        "Do not claim PDF/UA conformance until a validator such as veraPDF passes "
+        "and the semantics have been reviewed; this tool never adds the identifier."
+    )
     return remaining
 
 
@@ -120,17 +139,20 @@ def remediate_file(
 
         destination = _resolve_output(source, output_dir, input_root)
 
-        with fitz.open(source) as doc:
-            pages_lines = extract_lines(doc)
-            links_added, unresolved = add_link_annotations(doc)
-            title = title_override or guess_title(
-                pages_lines, filename_to_title(source.stem)
-            )
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
-                staged = Path(handle.name)
-            doc.save(str(staged), garbage=3, deflate=True)
-
+        # The staged file must be removed on every exit path, including a
+        # failure of the first save, so it is created inside the try.
+        staged: Path | None = None
         try:
+            with fitz.open(source) as doc:
+                pages_lines = extract_lines(doc)
+                links_added, unresolved = add_link_annotations(doc)
+                title = title_override or guess_title(
+                    pages_lines, filename_to_title(source.stem)
+                )
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+                    staged = Path(handle.name)
+                doc.save(str(staged), garbage=3, deflate=True)
+
             with pikepdf.open(staged) as pdf:
                 metadata_changes = apply_metadata_fixes(pdf, config.lang, title)
                 alt_texts = apply_link_alt_text(pdf)
@@ -140,19 +162,13 @@ def remediate_file(
                 if enable_tagging:
                     tag_counts = tag_document(pdf, pages_lines, config.lang)
 
-                # The conformance claim is only honest when the whole document
-                # was tagged; a partially tagged file must not assert PDF/UA.
-                fully_tagged = (
-                    enable_tagging
-                    and tag_counts["tagged_pages"] == len(pdf.pages)
-                    and tag_counts["skipped_pages"] == 0
-                )
-                if fully_tagged:
-                    declare_pdfua_conformance(pdf)
-
+                # The heuristic tags are not proof of conformance: tables,
+                # heading levels and reading order still need human review,
+                # so the PDF/UA identifier is deliberately never written here.
                 pdf.save(str(destination), linearize=False)
         finally:
-            staged.unlink(missing_ok=True)
+            if staged is not None:
+                staged.unlink(missing_ok=True)
 
         result.output = str(destination)
         result.changes = {
@@ -161,12 +177,13 @@ def remediate_file(
             "links_added": links_added,
             "link_descriptions_added": alt_texts,
             "tab_order_pages": tab_order_pages,
-            "declared_pdfua": fully_tagged,
             "unresolved_addresses": unresolved,
             **metadata_changes,
             **tag_counts,
         }
-        result.manual_work = _collect_manual_work(result.audit_before, tag_counts)
+        result.manual_work = _collect_manual_work(
+            result.audit_before, tag_counts, unresolved
+        )
 
     except (UnreadablePdf, pikepdf.PdfError, RuntimeError, ValueError, OSError) as error:
         result.error = f"{type(error).__name__}: {error}"

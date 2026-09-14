@@ -8,7 +8,7 @@ from pathlib import Path
 import fitz
 import pikepdf
 
-from .link_fix import find_addresses
+from .link_fix import place_addresses
 
 # Severity ranks used to sort a batch report by how much work each file needs.
 BLOCKER = "blocker"
@@ -111,14 +111,16 @@ def _check_title(pdf: pikepdf.Pdf, path: Path) -> list[Finding]:
 
 def _check_links(doc: fitz.Document) -> list[Finding]:
     plain_text_addresses = 0
+    unlocated_addresses = 0
     undescribed_links = 0
 
     for page in doc:
-        linked = len(page.get_links())
-        addresses = len(find_addresses(page.get_text()))
-        if addresses > linked:
-            plain_text_addresses += addresses - linked
-        undescribed_links += linked
+        undescribed_links += len(page.get_links())
+        for placement in place_addresses(page):
+            if not placement.located:
+                unlocated_addresses += 1
+            elif placement.unlinked_rects:
+                plain_text_addresses += 1
 
     findings: list[Finding] = []
     if plain_text_addresses:
@@ -128,6 +130,16 @@ def _check_links(doc: fitz.Document) -> list[Finding]:
                 BLOCKER,
                 "WCAG 2.4.4 (A)",
                 f"{plain_text_addresses} URL or email address(es) are plain text, not links.",
+            )
+        )
+    if unlocated_addresses:
+        findings.append(
+            Finding(
+                "unlocated_urls",
+                WARNING,
+                "WCAG 2.4.4 (A)",
+                f"{unlocated_addresses} address(es) appear in the text but could not be "
+                "located on the page, usually because they wrap; check them by hand.",
             )
         )
     if undescribed_links:

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
+from typing import Callable, TypeVar
 from pathlib import Path
 
 from .audit import AuditResult, audit_file
@@ -19,6 +21,9 @@ EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_PARTIAL_FAILURE = 3
 EXIT_CONFIG = 4
+EXIT_WORKER_POOL_BROKEN = 5
+
+ResultT = TypeVar("ResultT", AuditResult, RemediationResult)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,6 +109,48 @@ def _resolve_config(arguments: argparse.Namespace) -> Config:
     )
 
 
+def _output_dir_is_safe(output_dir: Path, input_root: Path) -> bool:
+    """False when the output directory sits inside the input tree.
+
+    Writing repaired files into the tree being read would overwrite sources
+    on this run or feed already-repaired files back in on the next one.
+    """
+    resolved_output = output_dir.resolve()
+    resolved_input = input_root.resolve()
+    return resolved_output != resolved_input and not resolved_output.is_relative_to(
+        resolved_input
+    )
+
+
+def _collect_result(
+    future: Future[ResultT],
+    path: Path,
+    error_result: Callable[[Path, str], ResultT],
+) -> ResultT:
+    """Turn an unexpected worker exception into an error result for its file.
+
+    The per-file handlers catch the expected failures; anything else must not
+    abort the whole batch and lose the report for every finished file. A dead
+    pool is a different problem and is left to the caller.
+    """
+    try:
+        return future.result()
+    except BrokenProcessPool:
+        raise
+    except Exception as error:  # noqa: BLE001 - worker boundary, logged and surfaced
+        reason = f"{type(error).__name__}: {error}"
+        logger.error("worker_failed", extra={"path": str(path), "reason": reason})
+        return error_result(path, reason)
+
+
+def _audit_error(path: Path, reason: str) -> AuditResult:
+    return AuditResult(path=str(path), error=reason)
+
+
+def _remediation_error(path: Path, reason: str) -> RemediationResult:
+    return RemediationResult(source=str(path), error=reason)
+
+
 def _run_audit(paths: list[Path], config: Config) -> list[AuditResult]:
     """Audit every file in parallel.
 
@@ -119,7 +166,7 @@ def _run_audit(paths: list[Path], config: Config) -> list[AuditResult]:
     ) as pool:
         futures = {pool.submit(audit_file, path): path for path in paths}
         for future in as_completed(futures):
-            results.append(future.result())
+            results.append(_collect_result(future, futures[future], _audit_error))
     return sorted(results, key=lambda item: item.path)
 
 
@@ -150,7 +197,9 @@ def _run_remediation(
             for path in paths
         }
         for future in as_completed(futures):
-            results.append(future.result())
+            results.append(
+                _collect_result(future, futures[future], _remediation_error)
+            )
     return sorted(results, key=lambda item: item.source)
 
 
@@ -189,20 +238,40 @@ def main(argv: list[str] | None = None) -> int:
 
     input_root = arguments.input if arguments.input.is_dir() else arguments.input.parent
 
-    if arguments.audit_only:
-        results = _run_audit(paths, config)
-        write_audit_report(arguments.report_dir, results)
-        failed = sum(1 for item in results if item.error)
-        logger.info(
-            "audit_complete",
-            extra={
-                "files": len(results),
-                "unreadable": failed,
-                "total_blockers": sum(item.blockers for item in results),
-                "report_dir": str(arguments.report_dir),
-            },
+    try:
+        if arguments.audit_only:
+            return _audit_batch(arguments, paths, config)
+        return _remediate_batch(arguments, paths, input_root, config)
+    except BrokenProcessPool as error:
+        logger.error("worker_pool_broken", extra={"reason": str(error)})
+        return EXIT_WORKER_POOL_BROKEN
+
+
+def _audit_batch(arguments: argparse.Namespace, paths: list[Path], config: Config) -> int:
+    results = _run_audit(paths, config)
+    write_audit_report(arguments.report_dir, results)
+    failed = sum(1 for item in results if item.error)
+    logger.info(
+        "audit_complete",
+        extra={
+            "files": len(results),
+            "unreadable": failed,
+            "total_blockers": sum(item.blockers for item in results),
+            "report_dir": str(arguments.report_dir),
+        },
+    )
+    return EXIT_PARTIAL_FAILURE if failed else EXIT_OK
+
+
+def _remediate_batch(
+    arguments: argparse.Namespace, paths: list[Path], input_root: Path, config: Config
+) -> int:
+    if not _output_dir_is_safe(arguments.out_dir, input_root):
+        logger.error(
+            "out_dir_inside_input",
+            extra={"out_dir": str(arguments.out_dir), "input": str(input_root)},
         )
-        return EXIT_PARTIAL_FAILURE if failed else EXIT_OK
+        return EXIT_USAGE
 
     arguments.out_dir.mkdir(parents=True, exist_ok=True)
     results = _run_remediation(

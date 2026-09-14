@@ -19,6 +19,7 @@ _REMEDIATION_COLUMNS = [
     "links_added",
     "tagged_pages",
     "skipped_pages",
+    "unresolved_addresses",
     "manual_work",
     "error",
 ]
@@ -44,6 +45,7 @@ def _remediation_row(result: RemediationResult) -> dict[str, object]:
         "links_added": changes.get("links_added", ""),
         "tagged_pages": changes.get("tagged_pages", ""),
         "skipped_pages": changes.get("skipped_pages", ""),
+        "unresolved_addresses": "; ".join(changes.get("unresolved_addresses", [])),
         "manual_work": " | ".join(result.manual_work),
         "error": result.error or "",
     }
