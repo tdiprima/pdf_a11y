@@ -234,7 +234,7 @@ class TestAdversarialInput:
         assert classify_line(line("x" * 100_000, 12.0, bold=True), 12.0) is Role.P
 
     def test_bidi_override_character_is_treated_as_text(self):
-        assert classify_line(line("‮ evil", 12.0), 12.0) is Role.P
+        assert classify_line(line("\u202e evil", 12.0), 12.0) is Role.P
 
     def test_regex_metacharacters_in_text_are_literal(self):
         # A crafted line must not be able to influence marker matching.
